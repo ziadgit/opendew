@@ -9,6 +9,8 @@ import {
 } from "@/lib/spotify-config";
 import type { SpotifyTokenResponse } from "@/lib/spotify-types";
 
+const SPOTIFY_TIMEOUT_MS = 10000;
+
 export const SPOTIFY_ACCESS_COOKIE = "spotify_access_token";
 export const SPOTIFY_REFRESH_COOKIE = "spotify_refresh_token";
 export const SPOTIFY_STATE_COOKIE = "spotify_oauth_state";
@@ -52,6 +54,7 @@ export async function exchangeAuthCodeForTokens(
 ): Promise<SpotifyTokenResponse> {
   const response = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
+    signal: AbortSignal.timeout(SPOTIFY_TIMEOUT_MS),
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "authorization_code",
@@ -75,6 +78,7 @@ export async function refreshSpotifyAccessToken(
 ): Promise<SpotifyTokenResponse> {
   const response = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
+    signal: AbortSignal.timeout(SPOTIFY_TIMEOUT_MS),
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "refresh_token",
@@ -114,6 +118,18 @@ export function attachSpotifyAuthCookies(
       maxAge: 60 * 60 * 24 * 30,
     });
   }
+}
+
+export function clearSpotifyAuthCookies(response: NextResponse) {
+  response.cookies.delete(SPOTIFY_ACCESS_COOKIE);
+  response.cookies.delete(SPOTIFY_REFRESH_COOKIE);
+  response.cookies.delete(SPOTIFY_STATE_COOKIE);
+  response.cookies.delete(SPOTIFY_VERIFIER_COOKIE);
+}
+
+export function isRefreshTokenRevokedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return message.includes("invalid_grant") || message.includes("revoked");
 }
 
 export async function getServerSpotifyTokens() {

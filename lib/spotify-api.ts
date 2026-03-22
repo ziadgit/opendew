@@ -1,4 +1,5 @@
 import type {
+  SpotifyAudioFeaturesResponse,
   SpotifyCreatePlaylistResponse,
   SpotifyProfile,
   SpotifyTopArtistsResponse,
@@ -7,10 +8,12 @@ import type {
 } from "@/lib/spotify-types";
 
 const SPOTIFY_API = "https://api.spotify.com/v1";
+const SPOTIFY_TIMEOUT_MS = 10000;
 
 async function spotifyFetch<T>(path: string, token: string, init?: RequestInit) {
   const response = await fetch(`${SPOTIFY_API}${path}`, {
     ...init,
+    signal: AbortSignal.timeout(SPOTIFY_TIMEOUT_MS),
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
@@ -49,6 +52,30 @@ export async function getTopArtists(token: string, limit = 20) {
   );
 }
 
+export async function getAudioFeatures(token: string, trackIds: string[]) {
+  if (trackIds.length === 0) {
+    return [];
+  }
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < trackIds.length; i += 100) {
+    chunks.push(trackIds.slice(i, i + 100));
+  }
+
+  const all = await Promise.all(
+    chunks.map(async (ids) => {
+      const params = new URLSearchParams({ ids: ids.join(",") });
+      const response = await spotifyFetch<SpotifyAudioFeaturesResponse>(
+        `/audio-features?${params.toString()}`,
+        token,
+      );
+      return response.audio_features.filter((f): f is NonNullable<typeof f> => Boolean(f));
+    }),
+  );
+
+  return all.flat();
+}
+
 export async function getRecommendations(
   token: string,
   seedTrackIds: string[],
@@ -82,15 +109,17 @@ export async function getRecommendations(
 
 export async function createPlaylist(
   token: string,
-  userId: string,
   name: string,
   description: string,
 ) {
-  return spotifyFetch<SpotifyCreatePlaylistResponse>(`/users/${userId}/playlists`, token, {
+  const safeName = name.trim().slice(0, 100) || "MTN DEW Custom Mix";
+  const safeDescription = description.trim().slice(0, 300);
+
+  return spotifyFetch<SpotifyCreatePlaylistResponse>(`/me/playlists`, token, {
     method: "POST",
     body: JSON.stringify({
-      name,
-      description,
+      name: safeName,
+      description: safeDescription,
       public: false,
     }),
   });
@@ -101,8 +130,35 @@ export async function addTracksToPlaylist(
   playlistId: string,
   trackUris: string[],
 ) {
-  return spotifyFetch(`/playlists/${playlistId}/tracks`, token, {
-    method: "POST",
-    body: JSON.stringify({ uris: trackUris.slice(0, 50) }),
-  });
+  const validUris = trackUris.filter((uri) => uri.startsWith("spotify:track:"));
+  const uniqueUris = Array.from(new Set(validUris));
+  let added = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < uniqueUris.length; i += 100) {
+    const chunk = uniqueUris.slice(i, i + 100);
+
+    try {
+      await spotifyFetch(`/playlists/${playlistId}/tracks`, token, {
+        method: "POST",
+        body: JSON.stringify({ uris: chunk }),
+      });
+      added += chunk.length;
+      continue;
+    } catch {
+      for (const uri of chunk) {
+        try {
+          await spotifyFetch(`/playlists/${playlistId}/tracks`, token, {
+            method: "POST",
+            body: JSON.stringify({ uris: [uri] }),
+          });
+          added += 1;
+        } catch {
+          skipped += 1;
+        }
+      }
+    }
+  }
+
+  return { requested: uniqueUris.length, added, skipped };
 }

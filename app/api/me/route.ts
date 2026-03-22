@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 import {
   attachSpotifyAuthCookies,
+  clearSpotifyAuthCookies,
   getRequestSpotifyTokens,
+  isRefreshTokenRevokedError,
   refreshSpotifyAccessToken,
 } from "@/lib/spotify-auth";
 import { getCurrentUserProfile } from "@/lib/spotify-api";
@@ -31,7 +33,13 @@ async function fetchProfileWithRefresh(request: NextRequest) {
         refresh_token: tokens.refresh_token ?? refreshToken,
       });
       return response;
-    } catch {
+    } catch (refreshError) {
+      if (isRefreshTokenRevokedError(refreshError)) {
+        const response = NextResponse.json({ authenticated: false }, { status: 401 });
+        clearSpotifyAuthCookies(response);
+        return response;
+      }
+
       return NextResponse.json({ authenticated: false }, { status: 401 });
     }
   }
